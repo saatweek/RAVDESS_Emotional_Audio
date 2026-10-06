@@ -1,4 +1,8 @@
-"""Explore one WAV file using correctly scaled, offline Plotly charts."""
+"""Teach waveform, FFT, STFT, and MFCC views using one complete recording.
+
+These are illustrative plots, not the exact feature() training pipeline: no edge
+trimming, four-second crop/padding, or CNN z-normalization is applied here.
+"""
 import argparse
 from pathlib import Path
 import librosa
@@ -8,6 +12,7 @@ from reporting import write_report
 
 
 def main():
+    """Load mono 16 kHz audio and export four complementary views."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--audio', default='sample_audio.wav')
     parser.add_argument('--output', default='runs/analysis/audio_features.html')
@@ -37,7 +42,8 @@ def main():
     spectrogram.update_layout(xaxis_title='Time (seconds)', yaxis_title='Frequency (Hz)')
     # MFCCs summarize spectral shape; coefficient index is NOT Hertz or pitch.
     # This educational plot shows 20 coefficients. The MLP uses 40; the selected
-    # CNN uses 64 log-mel bands instead. This script is visualization, not training.
+    # CNN uses 64 log-mel bands instead. This call also uses librosa's default mel
+    # filter count; training explicitly sets 64. This is visualization, not training.
     mfcc = librosa.feature.mfcc(y=signal, sr=sr, n_fft=512, hop_length=160, n_mfcc=20)
     coefficients = go.Figure(go.Heatmap(z=mfcc.tolist(), x=times, y=list(range(1, 21)), colorscale='RdBu'))
     coefficients.update_layout(xaxis_title='Time (seconds)', yaxis_title='MFCC coefficient')

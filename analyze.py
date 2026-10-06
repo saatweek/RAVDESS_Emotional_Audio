@@ -1,4 +1,8 @@
-"""Audit RAVDESS audio and produce an interactive Plotly exploration report."""
+"""Audit original audio and plot dataset metadata plus training-only examples.
+
+Read after records/split_records. This script measures file health; it does not
+produce normalized model inputs or train a classifier. See CODE_WALKTHROUGH.md.
+"""
 import argparse
 import csv
 import hashlib
@@ -15,6 +19,7 @@ from reporting import write_report
 
 
 def main():
+    """Inventory files, reject cross-split byte copies, and save CSV/JSON/HTML."""
     # Start with data quality, before interpreting model accuracy. A model can
     # learn from wrong labels, duplicated files or corrupt inputs without making
     # the underlying problem obvious in its final accuracy number.
@@ -107,7 +112,8 @@ def main():
     fig.update_layout(xaxis_title='Duration (seconds)', yaxis_title='RMS amplitude')
     figures.append(('Duration and amplitude', 'Amplitude differences can reflect the recording or performance and do not establish emotion on their own.', fig))
     # Feature examples come only from training actors. Show original duration
-    # here for interpretation; feature() crops/pads the actual CNN inputs.
+    # here for interpretation; feature() trims/crops/pads and z-normalizes actual
+    # CNN inputs. The report's peak-relative dB colors are not those input values.
     # 160 samples / 16,000 samples per second = 0.01 seconds between columns.
     fig = make_subplots(rows=4, cols=2, subplot_titles=EMOTIONS, vertical_spacing=.08)
     for index, emotion in enumerate(EMOTIONS):

@@ -1,10 +1,15 @@
-"""Interactive illustration of two tones and their Fourier spectrum."""
+"""Teach waveform addition and Fourier frequency peaks using synthetic tones.
+
+Start here for the simplest signal example; no dataset, training, or emotion
+labels are involved. Next read Audio_prep.py. See CODE_WALKTHROUGH.md.
+"""
 import numpy as np
 import plotly.graph_objects as go
 from reporting import write_report
 
 
 def main():
+    """Generate one second of two tones and save an offline interactive report."""
     sr = 1000
     # sr samples per second for one second. These two pure tones are a teaching
     # example, not an emotion dataset. Faster oscillations mean higher frequency.
@@ -14,6 +19,7 @@ def main():
     wave = go.Figure()
     for name, signal in [('30 Hz', first), ('70 Hz', second), ('Combined', first + second)]:
         wave.add_scatter(x=time.tolist(), y=signal.tolist(), name=name, mode='lines')
+    # Zoom the display to 0.2 seconds; the FFT still receives the full second.
     wave.update_layout(xaxis_title='Time (seconds)', yaxis_title='Amplitude', xaxis_range=[0, .2])
     # Recover the constituent frequencies from their sum. Multiplying magnitudes
     # by 2 accounts for the omitted negative-frequency half for these interior

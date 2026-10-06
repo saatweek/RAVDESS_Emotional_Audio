@@ -1,4 +1,8 @@
-"""Select by validation macro F1, then evaluate the chosen checkpoint on test actors."""
+"""Select by validation macro F1, then evaluate the chosen checkpoint on test actors.
+
+Works with CNN, MFCC, and WavLM runs through the shared checkpoint factory.
+Study this after ravdess.train/score; it assembles an evaluation, not a new model.
+"""
 import argparse
 import csv
 import json
@@ -7,14 +11,14 @@ from pathlib import Path
 
 import numpy as np
 import plotly.graph_objects as go
-import torch
 from sklearn.metrics import f1_score
 
-from ravdess import device_for, loader, make_model, score, save_json, plot_results, EMOTIONS
+from ravdess import device_for, loader, load_checkpoint, score, save_json, plot_results, EMOTIONS
 from reporting import write_report
 
 
 def main():
+    """Require matching manifests, copy the winner, and export test evidence."""
     # Model selection is itself a learning decision. Comparing several models on
     # the TEST set and reporting the winner would bias the claimed final result.
     # Read each saved VALIDATION score first, freeze the winner, then test it.
@@ -36,6 +40,7 @@ def main():
         reference = splits
         metrics = json.loads((root / 'validation_metrics.json').read_text())
         candidates.append(dict(run=str(root), validation_accuracy=metrics['accuracy'], validation_macro_f1=metrics['macro_f1']))
+    # max keeps the first candidate on an exact tie; no test-based tie-breaking.
     winner = max(candidates, key=lambda r: r['validation_macro_f1'])
     # Persist the selection before any test predictions are made.
     save_json(output / 'selection.json', dict(criterion='validation_macro_f1', candidates=candidates, selected=winner))
@@ -45,12 +50,14 @@ def main():
     # training schedule and would produce a different checkpoint to evaluate.
     for name in ['best.pt', 'splits.json', 'config.json', 'history.json', 'validation_metrics.json']:
         shutil.copy2(source / name, output / name)
+    if (source / 'wavlm_encoder').is_dir():
+        # best.pt contains only WavLM head weights; inference also needs encoder.
+        shutil.copytree(source / 'wavlm_encoder', output / 'wavlm_encoder')
     device = device_for(args.device)
-    checkpoint = torch.load(output / 'best.pt', map_location=device, weights_only=True)
-    model = make_model(checkpoint.get('model_type', 'cnn'), checkpoint.get('pool_bands', 1)).to(device)
-    model.load_state_dict(checkpoint['model'])
+    checkpoint, model, extract = load_checkpoint(output / 'best.pt', device)
     rows = reference['test']
-    metrics = score(model, loader(rows, checkpoint['config'], 16, cache='data/features'), device)
+    metrics = score(model, loader(rows, checkpoint['config'], 16, cache='data/features', extract=extract), device)
+    # loader/score retain manifest order, so row IDs align with these predictions.
     actors = np.array([r['actor'] for r in rows])
     truth, predictions = np.array(metrics['truth']), np.array(metrics['predictions'])
     per_actor = []
@@ -73,6 +80,8 @@ def main():
         writer.writerow(['file', 'actor', 'true_emotion', 'predicted_emotion', 'correct', *[f'prob_{e}' for e in EMOTIONS]])
         for row, prediction, probabilities in zip(rows, predictions, metrics['probabilities']):
             writer.writerow([row['path'], row['actor'], EMOTIONS[row['label']], EMOTIONS[prediction], row['label'] == prediction, *probabilities])
+    # Show training/validation history beside the restored winner's test scores.
+    # Candidate bars use validation; actor bars use only the selected model's test.
     history = json.loads((output / 'history.json').read_text())
     plot_results(output, history, metrics)
     fig = go.Figure()

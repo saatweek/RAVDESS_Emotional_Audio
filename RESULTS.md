@@ -1,4 +1,9 @@
-# Experiment results
+# Original CNN and MFCC experiment results
+
+This records the original four-candidate experiment. Its CNN checkpoint remains
+the web app's CNN option. The later frozen WavLM experiment is the current best
+reported result: see [WAVLM_RESULTS.md](WAVLM_RESULTS.md). The web demo and study
+order are documented in [README.md](README.md) and [CODE_WALKTHROUGH.md](CODE_WALKTHROUGH.md).
 
 ## Outcome
 
@@ -48,7 +53,7 @@ dataset; model comparison used validation predictions only.
 
 ## Model comparison
 
-All four candidates used the same actor split. Checkpoints were selected by
+All four candidates in this original comparison used the same actor split. Checkpoints were selected by
 validation macro F1, and only the winning candidate was evaluated on test actors.
 
 | Candidate | Model seed | Validation accuracy | Validation macro F1 |
@@ -113,21 +118,25 @@ prediction and its eight probabilities are in `runs/final/test_predictions.csv`.
 Settings, actor manifests, training histories and best checkpoints are retained.
 
 The environment was verified with PyTorch 2.6.0+cu124 on the NVIDIA GeForce RTX
-3050 Ti Laptop GPU (4 GB). Six automated tests passed, including an actual CUDA
+3050 Ti Laptop GPU (4 GB). At this experiment's completion, six automated tests passed, including an actual CUDA
 mixed precision optimizer step. Dependency consistency passed. The dataset audit,
 four complete training runs, checkpoint selection, test evaluation and sample WAV
 prediction completed successfully. Plotly chart rendering was checked in a browser.
+The current suite has 13 tests after adding WavLM and Gradio coverage; this
+historical result does not depend on rerunning training for documentation edits.
 
 ## Limitations and future experiments
 
 RAVDESS is a small, acted, English-language dataset containing only two statements.
 Real conversational recordings, noise, accents and microphones can differ greatly.
-The CNN sees a centered four-second segment after trimming; it is not a streaming
-or long-recording classifier. Its softmax scores are not calibrated probabilities
+The CNN sees a centered four-second segment after trimming. The later Gradio
+app repeatedly calls it on rolling windows; the CNN itself has no persistent
+conversational memory or long-recording aggregation. Its softmax scores are not calibrated probabilities
 of a person's internal feelings.
 
 A future study could use nested actor-group cross-validation, stronger training
-augmentation, and a speech encoder pretrained on independent speech data. Such
+augmentation, and controlled fine-tuning of the pretrained speech encoder. Frozen
+WavLM has since been implemented and reported in [WAVLM_RESULTS.md](WAVLM_RESULTS.md). Such
 experiments should use a fresh evaluation protocol: the reported test outcomes
 have now been inspected. High random-file-split scores from other projects are
 not directly comparable to these actor-exclusive results.

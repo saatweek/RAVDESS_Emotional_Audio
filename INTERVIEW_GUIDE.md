@@ -1,424 +1,580 @@
-# Understand and explain this project
+# Understand and explain the project
 
-Start with the problem, then follow one recording through the code. You do not
-need to master all of signal processing before Monday. Aim to explain what the
-system learns, how the input is represented, how evaluation avoids leakage, and
-where the result is weak. Use the code comments for the details you cannot yet
-explain in your own words.
+Use [README.md](README.md) for commands and the reading map, and
+[CODE_WALKTHROUGH.md](CODE_WALKTHROUGH.md) alongside the source for the purpose of
+each statement. This guide explains the ideas and the decisions you need to
+defend in an interview. Learn to trace one recording through the system before
+trying to memorize implementation details.
 
-If you have only 15 minutes for a first pass, learn these five facts:
+## 1. The project in a minute
 
-- It predicts eight acted speech emotions from audio, not a transcript.
-- The selected CNN receives a normalized 64-by-401 log-mel matrix per clip.
-- Actors are separated: 16 train, four validation, four test.
-- Validation chose the winner; its final test result is 133/240 correct and
-  0.5324 macro F1. Sad is its weakest class.
-- Several settings are practical baseline choices, not proven optima; the result
-  does not establish reliability on ordinary conversations.
+A useful explanation in your own words:
 
-## 1. What problem are we solving?
+> This is an eight-class speech emotion project on RAVDESS. I compare a CNN
+> on log-mel spectrograms, an MLP on MFCC statistics, and a pretrained WavLM speech
+> encoder whose weights I freeze while training an emotion head. I split by
+> actor to keep voices separate between training, validation and testing.
+> Validation macro F1 selects the checkpoint and candidate. Frozen WavLM achieved
+> 71.67% accuracy and 0.7038 macro F1 on 240 recordings from four held-out actors.
+> A Gradio app reuses the saved preprocessing and weights for file uploads and
+> rolling four-second microphone windows. These results concern acted speech;
+> the scores do not measure a person's internal mood.
 
-**Input:** a recorded spoken sentence. **Output:** one of eight recorded emotion
-labels: neutral, calm, happy, sad, angry, fearful, disgust or surprised.
+The original selected CNN scored 55.42% accuracy and 0.5324 macro F1 on those same
+test actors. CNN results live in `runs/final/`; the later selected WavLM result
+lives in `runs/wavlm_comparison/`. The app offers the trained MFCC baseline too,
+but we have not reported a selected MFCC held-out test result.
 
-This is **supervised multiclass classification**: training examples have known
-labels, and each recording has one target class. It is not speech recognition
-(turning speech into words), speaker identification (recognizing who spoke), or
-audio generation. The model predicts an acted dataset label, not someone's
-verified psychological state.
+Be able to explain these five facts before going deeper:
 
-RAVDESS speech has 1,440 named recordings from 24 actors reading two statements.
-The filename encodes the target label. For example:
+- The target is an **acted recording label**, learned from acoustic samples.
+- The three representations have different information and tensor shapes.
+- Actor IDs control splits; filename emotion IDs supply targets, never inputs.
+- A frozen encoder is pretrained; its emotion head is learned on our training set.
+- Live mode repeats classification on windows; latency and generalization remain
+  practical limitations.
+
+## 2. Read in stages
+
+The full file order and statement notes are in the walkthrough. Use these passes:
+
+| Pass | Read | Explain without the notes |
+|---|---|---|
+| First: purpose | README, this guide sections 1–4, result tables | Problem, dataset, inputs, labels, actor split, current result |
+| Second: signal path | Fourier demo, Audio_prep, `feature`, `waveform` | Samples → transform/encoder → representation and dimensions |
+| Third: learning | Networks, loader, score, train | Trainable state, loss, gradients, validation and best checkpoint |
+| Fourth: operation | Finalize, reporting, runner, app | Test reporting and browser audio → saved inference |
+| Fifth: evidence | Three test files, both results documents | What tests/results support and what they cannot establish |
+
+For a single line, ask: What object is it operating on? What is its type/shape?
+What changes? Does it learn from training data, make a validation decision, or
+just transform one input? What later code depends on it? This is more useful
+than reciting function names.
+
+## 3. Dataset, labels and leakage
+
+RAVDESS speech has 1,440 named WAV recordings from 24 actors reading two
+statements. Eight emotions are represented. Neutral has 96 files; the other
+seven classes have 192 each because they include two intensity levels.
+
+Example filename:
 
 ```text
 03-01-06-01-02-01-12.wav
-│  │  │  │  │  │  └─ Actor 12
-│  │  │  │  │  └──── Repetition 1
-│  │  │  │  └─────── Statement 2
-│  │  │  └────────── Normal intensity
-│  │  └───────────── Emotion 6: fearful
-│  └─────────────── Speech
-└────────────────── Audio only
+03 = audio only
+01 = speech
+06 = fearful (class index 5 after subtracting one)
+01 = normal intensity
+02 = statement 2
+01 = repetition 1
+12 = actor 12
 ```
 
-The network receives features derived from audio samples. It does **not** receive
-the filename, actor ID, or emotion ID as an input. The label is used to measure
-training error; actor ID determines the data split.
+`records()` validates filenames and creates `{path, label, actor}` metadata.
+It does not decode samples. The model receives neither paths nor actor IDs.
+The target tells the loss which class is correct; actor tells the split which
+recordings must stay together.
 
-**Check yourself:** Why would feeding the emotion number from the filename to the
-network make the experiment meaningless? It would reveal the answer at input
-time, and ordinary new audio does not come with that answer.
+The download used Kaggle dataset version 1, with two folder copies. The downloader
+selects one complete copy. `records()` rejects duplicate filenames. `analyze.py`
+also fingerprints file **bytes**; this finds exact copies with different names,
+but not re-encoded or perceptually similar duplicates. One actor-07 duplicate
+pair is retained within training. No byte-identical pair crosses the splits.
 
-## 2. Audio basics, without assuming prior knowledge
+Split seed 42 shuffles **actors**, not individual files:
 
-| Term | Meaning | In this project |
+| Partition | Actors | Files | Role |
+|---|---|---:|---|
+| Train | 01, 02, 03, 04, 05, 07, 08, 09, 10, 13, 15, 17, 20, 21, 22, 23 | 960 | Fit network weights and feature normalization |
+| Validation | 11, 12, 14, 18 | 240 | Choose epochs/candidates and adjust learning rate |
+| Test | 06, 16, 19, 24 | 240 | Score the selected fixed model |
+
+Model seed `--seed` and split seed `--split-seed` serve different purposes.
+Changing model initialization should not silently change the test population.
+The split is not gender-stratified. Both statements occur across splits, so it
+tests unseen voices speaking familiar text, not unseen language or lexical content.
+
+A random file split could put the same actor on both sides. The network could
+exploit speaker/recording characteristics, yielding an inflated claim about new
+speakers. Actor separation reduces this leakage; it does not guarantee real-world
+generalization.
+
+Training feature means/stds for MFCC and WavLM are fitted on training files only.
+Applying per-clip CNN normalization to a new clip is different: it uses that
+clip's own samples and does not fit across validation/test examples.
+
+Metadata and file-health audit statistics cover all files. Training-only example
+plots avoid choosing feature settings by looking at test predictions. Test
+outcomes have since been observed for CNN and WavLM; future tuning needs a fresh
+evaluation protocol rather than claiming this same test set remains untouched.
+
+## 4. Audio fundamentals
+
+| Term | Meaning | Example here |
 |---|---|---|
-| Sample | One measured amplitude value | A floating-point number after loading |
-| Sample rate | Number of samples per second | Standardized to 16,000 Hz |
-| Amplitude | Signal value at an instant | Related to signal strength, not an emotion label |
-| Frequency | Oscillations per second, measured in Hz | Describes components of the sound |
-| Pitch | Perceived highness/lowness of a sound | Related to periodicity; not explicitly extracted here |
-| Waveform | Amplitude plotted against time | First plot in `Audio_prep.py` |
-| Spectrum | Strength of frequency components | FFT plot |
-| Spectrogram | Frequency content changing over time | STFT and log-mel representations |
-| Tensor | A multidimensional numerical array | PyTorch input, weights and outputs |
+| Sample | One amplitude measurement | A float in the waveform array |
+| Sample rate | Measurements per second | 16,000 Hz after resampling |
+| Frequency | Oscillations per second | A 220 Hz tone |
+| Waveform | Amplitude versus time | `samples[index]` plotted at `index / sr` |
+| FFT | Frequency decomposition of one signal/window | Whole-recording spectrum |
+| STFT | FFT repeated in overlapping short windows | Frequency content over time |
+| Spectrogram | Matrix of frequency content versus time | Linear-frequency or mel-frequency view |
+| Mel filterbank | Overlapping frequency summaries with finer low-frequency resolution | 64 bands for CNN |
+| MFCC | Cosine-transform coefficients of log-mel spectral shape | 40 coefficients before statistics |
+| Tensor | Multidimensional numeric array | `[batch, channel, frequency, time]` |
 
-A one-second recording at 16 kHz has 16,000 samples. A four-second recording has
-64,000. **Sample rate is not pitch**: recording a 220 Hz tone at 16 kHz means taking
-16,000 measurements per second of a signal oscillating 220 times per second.
+A four-second 16 kHz recording contains 64,000 samples. Sample rate is not pitch:
+a 220 Hz wave sampled 16,000 times per second is still a 220 Hz wave. Resampling
+computes a new representation at another rate; changing a file header alone
+changes playback speed and pitch. At 16 kHz, the highest representable frequency
+is about 8 kHz.
 
-Resampling computes a new sequence representing approximately the same signal
-at another sample rate. Merely changing the rate in a file header would change
-playback speed/pitch. Resampling to 16 kHz also limits representable frequencies
-to below about 8 kHz; retaining 48 kHz could preserve higher-frequency details.
+`Fourier_Transformation.py` adds 30 Hz and 70 Hz sine waves and recovers peaks
+with an FFT. `Audio_prep.py` illustrates real audio. Neither trains a model or
+produces the exact CNN input; the latter uses a full recording without edge
+trimming/cropping and plots 20 MFCCs using librosa defaults.
 
-Open `runs/analysis/fourier.html`. Two tones at 30 Hz and 70 Hz combine into one
-waveform; its Fourier spectrum reveals both. Real speech contains many changing
-components, so a single FFT of the entire recording loses useful timing.
+The STFT settings are a 512-sample window (32 ms at 16 kHz) and 160-sample hop
+(10 ms). Larger windows improve frequency resolution while reducing time
+localization; smaller hops add more overlapping columns and computation.
+These settings are practical choices, not proven optima.
 
-## 3. Follow one WAV through `feature()`
+Power is squared magnitude. `power_to_db` uses a factor of 10 on a log ratio;
+`amplitude_to_db` uses 20. With `ref=np.max`, 0 dB means the strongest cell
+in that particular representation, not a universal absolute sound level.
+Do not call FFT magnitude a power spectrum or MFCC coefficient index a frequency.
 
-```mermaid
-flowchart LR
-    A[WAV samples] --> B[Mono and 16 kHz]
-    B --> C[Trim quiet edges]
-    C --> D[Crop or pad to 4 seconds]
-    D --> E[Windowed Fourier power]
-    E --> F[64 mel bands]
-    F --> G[Log scale and normalize]
-    G --> H[CNN]
-    H --> I[8 scores]
-    I --> J[Predicted emotion]
+## 5. The CNN recording path
+
+Follow `ravdess.feature(path, config)` with a saved CNN config:
+
+1. Load/resample to mono 16 kHz and reject invalid or silent audio.
+2. Trim quiet leading/trailing frames with a relative 35 dB threshold. This
+   removes edges, not interior pauses, noise or all nonspeech.
+3. Center-crop longer trimmed clips to 64,000 samples. Right-pad shorter ones
+   with zeros. Fixed length makes stacking and minibatches simple.
+4. Compute 64 mel-band power values per STFT frame.
+5. Convert to peak-relative log power.
+6. Subtract that matrix's mean and divide by its std plus a small epsilon.
+7. Cast to float32 and add one channel axis: `[1, 64, 401]`.
+
+With centered librosa framing, 64,000 samples and hop 160 produce 401 columns.
+These numbers are fed directly into the network. The CNN never reads a Plotly
+heatmap or its colors. Per-clip normalization reduces recording-scale effects
+but removes absolute amplitude cues, a tradeoff for acted intensity.
+
+Four convolution blocks each contain convolution, batch normalization, ReLU,
+max pooling and dropout. The shape trace is:
+
+```text
+[B, 1,   64, 401]
+[B, 16,  32, 200]
+[B, 32,  16, 100]
+[B, 64,   8,  50]
+[B, 128,  4,  25]
+[B, 128,  4,   1]  adaptive average pooling, selected variant
+[B, 512]           flatten
+[B, 8]             dropout + linear classifier
 ```
 
-Read `ravdess.py: feature` alongside this section.
+A learned 3×3 convolution searches for local time/frequency patterns. Padding
+preserves the spatial dimensions before pooling. Max pooling reduces both axes.
+Adaptive average pooling averages time while keeping four frequency regions.
+The original global-pooling baseline retains one region and flattens to 128.
+The four-region variant performed better on validation in these runs; that
+does not prove every audio CNN must retain those exact regions.
 
-**Load and standardize.** `librosa.load(..., sr=16000, mono=True)` converts different
-recordings to a common representation. The audit found both mono and stereo
-source files. Mono simplifies the task; spatial stereo information is not a
-focus of this classifier.
+BatchNorm uses batch statistics during training and stored estimates at
+evaluation. ReLU introduces a nonlinearity; stacked linear mappings alone would
+remain one linear mapping. Dropout removes units/maps randomly during training
+and is disabled at evaluation. These mechanisms do not guarantee no overfitting.
 
-**Trim quiet edges.** `top_db=35` removes leading/trailing frames sufficiently quiet
-relative to that clip's maximum RMS. It does not remove background noise or
-interior pauses. A quiet spoken onset could be removed, so this is a tradeoff,
-not automatically an improvement. See the [librosa trim documentation](https://librosa.org/doc/0.11.0/generated/librosa.effects.trim.html).
+CNN training additionally zeros six mel bands and 20 time frames (~0.2 seconds),
+with one pair of mask positions shared within each batch. Zero means the
+normalized feature mean, not literal acoustic silence. Validation/inference
+have no masks. Random crops, additive noise and pitch/time-stretch augmentation
+were not part of the completed experiments.
 
-**Make lengths consistent.** The CNN branch keeps the center four seconds of a
-long trimmed clip, or appends zeros to a shorter one. This makes batching simple.
-It may miss an emotional event near an edge of a long recording. A future version
-could classify several windows and aggregate their predictions.
+## 6. The MFCC + neural network path
 
-**Look at short windows.** Speech changes over time. The STFT analyzes overlapping
-windows; here 512 samples span 32 ms, and a 160-sample hop advances 10 ms. Shorter
-windows localize changes in time better, while longer windows can separate close
-frequencies better. The FFT bin spacing here is 16,000/512 = 31.25 Hz; this is not
-the spacing of the final mel bands.
+The MFCC branch loads and trims the full recording. It does **not** apply the CNN
+four-second crop/padding. It computes 40 MFCC coefficients over 64 mel bands and
+their first-order delta coefficients.
 
-**Build mel features.** Squared Fourier magnitudes describe power. Overlapping mel
-filters combine that power into 64 bands. Log conversion compresses its dynamic
-range. The output is a numerical time-frequency matrix, not an RGB image. With
-librosa's default centered framing, the fixed input produces 401 time columns.
-See the [mel-spectrogram API](https://librosa.org/doc/0.11.0/generated/librosa.feature.melspectrogram.html).
+For each of the 40 coefficients, it stores:
 
-**Normalize.** Subtract each recording's feature mean and divide by its standard
-deviation. This can reduce sensitivity to recording level, but removes absolute
-loudness information. The model still sees relative patterns across time and
-frequency. A tiny added number prevents division by zero.
+- Mean over time.
+- Population standard deviation over time.
+- Mean of the delta over time.
+- Population standard deviation of the delta over time.
 
-The exact constants—16 kHz, four seconds, 64 bands, 35 dB—were practical baseline
-choices. We did not run an experiment proving each one better than all alternatives.
+Concatenation gives 160 features. This compresses variable-length audio into a
+fixed vector cheaply, but discards the order in which events occurred.
+Coefficient index is a cepstral dimension, not Hertz or pitch.
 
-## 4. What does the CNN actually do?
+`EmotionMLP` first uses saved feature-wise means/stds fitted on training actors.
+These are **buffers**, which move with the model and appear in its state dictionary
+but are not learned parameters. The network is:
 
-Read `EmotionCNN` in `ravdess.py`. A **convolution** moves a learned small filter
-across the feature matrix. Training changes filter values so combinations of local
-patterns help predict labels. We do not manually assign a filter to detect anger.
+```text
+[B,160] → Linear(160,256) → LayerNorm → ReLU → Dropout(0.35)
+        → Linear(256,128) → LayerNorm → ReLU → Dropout(0.35)
+        → Linear(128,8)
+```
 
-Each block contains convolution, batch normalization, ReLU, max pooling and
-dropout. Normalization helps control activation scales; ReLU introduces a
-nonlinear transformation; pooling reduces size; dropout randomly removes parts
-of the representation during training to discourage dependence on a few features.
-None guarantees better generalization on its own.
+LayerNorm normalizes activations within an example. It differs from both the
+input's train-fitted normalization and CNN BatchNorm. The MFCC model overfit:
+training accuracy became much higher than validation accuracy. We use the best
+validation epoch, not the last one. It serves as a feature-based baseline and
+a web app option, not a reported winning test model.
 
-For the selected model, the shape trace is:
+## 7. The WavLM path and Hugging Face
 
-| Stage | Tensor shape | How to read it |
+WavLM is a pretrained speech encoder. Hugging Face Transformers supplies the
+architecture, loading APIs and audio processor. Our code supplies waveform
+validation, revision handling, freeze/pooling choices, normalization, an emotion
+head and the training/evaluation pipeline.
+
+The completed run uses `microsoft/wavlm-base-plus` at commit
+`4c66d4806a428f2e922ccfa1a962776e232d487b`. A Hub `main` reference can move,
+so the training initializer resolves a commit and loads config, processor and
+weights from that revision. It exports an offline encoder alongside `best.pt`.
+
+The preprocessing in `wavlm.waveform()`:
+
+1. Read original-rate audio with channels preserved for validation.
+2. Reject invalid/silent samples, then downmix to mono and resample to 16 kHz.
+3. Trim edges and take at most four centered seconds.
+4. Keep short clips unpadded. Reject fewer than 400 samples (25 ms) for base-plus.
+
+The saved audio feature extractor prepares tensors and attention-mask/normalization
+settings. It is not a text tokenizer. This base-plus processor's saved settings
+have `do_normalize=False`; our code does not add an assumed processor
+normalization step. The emotion head has its own train-fitted normalization.
+
+The encoder maps samples to contextual hidden states:
+
+```text
+[N samples] → processor → input_values [1,N]
+             → frozen WavLM → [1,T,768]
+             → select recording → [T,768]
+             → time mean [768] + population time std [768]
+             → concatenate → [1536]
+```
+
+The encoder downsamples time, so `T` is not `N` or the CNN's 401 columns.
+Mean pools the contextual representation; std adds variation across time.
+Pooling loses temporal order despite using contextual states. One unpadded clip
+per call avoids pooling padding and keeps extraction memory small.
+
+Three different mechanisms keep inference appropriate:
+
+- `.to(device)`: place tensors/weights on CPU or CUDA.
+- `.eval()`: disable training-time stochastic behavior.
+- `.requires_grad_(False)` and `inference_mode()`: freeze encoder parameters
+  and avoid constructing an autograd graph.
+
+`eval()` alone does **not** stop gradient computation. The frozen encoder is
+outside the trainable head and outside its optimizer. After extracting/caching
+features, training updates only:
+
+```text
+[B,1536] → train-fitted normalization
+         → Linear(1536,256) → LayerNorm → ReLU → Dropout(0.35)
+         → Linear(256,8)
+```
+
+Cached features remain valid across epochs because encoder weights do not
+change. An unfrozen encoder would need recomputation as its weights change.
+New uploaded/microphone audio is encoded at prediction time; the app doesn't
+look for it in the training cache.
+
+This is **transfer learning with a frozen encoder**, not encoder fine-tuning.
+Pretraining provides speech representations, not our eight-class mapping.
+Fine-tuning could help but would require gradients, more memory, careful learning
+rates and new evaluation. We have not tested full encoder fine-tuning.
+
+## 8. What actually happens in training?
+
+Read `loader()`, `score()`, then `train()`. The train routine:
+
+1. Validates positive limits; seeds Python, NumPy and PyTorch.
+2. Creates a new run directory, parses files and saves actor manifests.
+3. For WavLM, loads/freezes/exports the encoder and records resolved settings.
+4. Prepares training and validation features. Test feature extraction is excluded
+   when developing with `--skip-test`.
+5. Builds the trainable network. Fits MFCC/WavLM input buffers on training
+   features only; clamps stds away from zero.
+6. Counts training labels and weights cross entropy inversely by class frequency.
+7. Creates AdamW, a validation-driven scheduler and CUDA gradient scaler.
+8. Runs epochs of minibatch updates, evaluates validation, and saves strict
+   improvements in validation macro F1.
+9. Stops after consecutive nonimproving epochs reach patience; restores the best
+   checkpoint and writes validation metrics/report.
+
+The DataLoader stacks features in CPU RAM and transfers only a minibatch.
+Training shuffles; evaluation preserves manifest order so filenames still align
+with predictions. This dataset is small; a larger one would need a lazy dataset
+and possibly parallel loading. Feature cache keys use file metadata/settings,
+not automatic hashes of source code. Editing extraction logic requires deliberate
+cache invalidation.
+
+For each minibatch:
+
+```text
+clear previous gradients → forward logits → weighted loss
+→ scaled backward gradients → unscale → clip norm at 5
+→ optimizer step → update scaler
+```
+
+**Logits** are raw class scores. Cross entropy includes log-softmax, so the
+network should not apply softmax before that loss. Display uses softmax and
+argmax; softmax preserves the winning class while normalizing the scores.
+
+Neutral has half as many recordings. The formula `N / (8 * class_count)`
+gives its mistakes twice the relative weight. Class weighting differs from
+oversampling: it changes loss contributions rather than drawing extra examples.
+
+AdamW adapts updates and applies weight decay (0.01). Learning rate starts at
+0.001. Gradient clipping limits the global parameter-gradient norm after
+unscaling. CUDA autocast chooses lower precision for suitable head/CNN operations;
+GradScaler helps prevent small gradients underflowing. CPU uses float32, and the
+frozen WavLM extraction remains float32.
+
+The scheduler halves LR after a validation macro-F1 plateau with patience 5.
+Early stopping uses a separate, larger experiment patience. The scheduler can
+reduce step size without terminating training. Best checkpoint means best
+validation macro F1, not lowest training loss or highest test accuracy.
+
+An epoch sees all 960 training examples. Batch 16 yields 60 updates; batch 32
+yields 30. `--epochs` is a maximum: WavLM's best was epoch 4 and it stopped
+at 24 with patience 20. Selected CNN's best was 73 and it stopped at 103 with
+patience 30.
+
+Training accuracy includes dropout, changing weights and CNN masking; validation
+uses a fixed model in eval mode. Validation accuracy can exceed training accuracy
+without leakage. Training loss is class-weighted and accumulated from minibatch
+means, while validation loss is unweighted per-recording cross entropy; their
+numerical gap is not a clean same-objective comparison.
+
+`best.pt` saves parameters, buffers, architecture/preprocessing metadata and
+selected epoch. It does not save optimizer/scheduler/scaler/RNG state for an exact
+training resume. WavLM additionally needs the exported encoder/processor directory.
+
+## 9. Metrics, selection and results
+
+Accuracy is fraction correct. For one class, precision asks how many predicted
+examples of that class are correct; recall asks how many true examples were found.
+F1 is their harmonic mean. Macro F1 averages the eight class F1s equally, keeping
+the smaller neutral class visible. Weighted F1 instead weights by support.
+Undefined precision/F1 uses zero in this implementation.
+
+Confusion matrix rows are true classes; columns are predictions. Row-normalized
+diagonal entries are recalls. The highest softmax score is not calibrated
+confidence: high-scoring mistakes remain possible.
+
+Original validation comparison:
+
+| Candidate | Validation accuracy | Validation macro F1 |
+|---|---:|---:|
+| CNN, global frequency pooling, seed 42 | 47.08% | 0.4359 |
+| CNN, four frequency regions, seed 42 | 52.50% | 0.4834 |
+| MFCC MLP, seed 42 | 44.17% | 0.4452 |
+| CNN, four frequency regions, seed 43 | 50.83% | 0.4617 |
+| Later frozen WavLM + head, seed 42 | **71.25%** | **0.7042** |
+
+`finalize.py` requires identical train/validation/test manifests, picks by
+validation macro F1, saves `selection.json`, then copies and tests the winner.
+An exact tie keeps the first candidate; test performance never breaks it.
+
+| Reported selected model | Correct test recordings | Accuracy | Macro F1 |
+|---|---:|---:|---:|
+| Original four-region CNN | 133/240 | 55.42% | 0.5324 |
+| Later frozen WavLM + head | 172/240 | 71.67% | 0.7038 |
+
+The improvement is **16.25 percentage points**, not 16.25% relative improvement.
+We changed both representation and classifier, so the comparison does not isolate
+pretraining alone as a causal explanation. WavLM's early best epoch and subsequent
+training improvement do not mean it generalizes perfectly.
+
+For the CNN, sad recall was 4/32 and calm had the strongest F1. For WavLM, angry,
+fearful and disgust had stronger F1 than happy, neutral and sad. Exact per-emotion
+tables are in the result documents. WavLM's per-actor accuracy is 70%, 71.67%,
+80% and 65%; four actors are too few for a population guarantee.
+
+A majority-class guess achieves 13.33% here; uniform random guessing has expected
+12.5% accuracy. Better than these baselines is useful evidence, not proof of
+reliability. Two CNN seeds and one split do not estimate robust variability.
+
+The unlabeled `sample_audio.wav` example checks operation, not accuracy. A
+model's prediction is not its own ground truth. CPU/CUDA may agree in argmax while
+differing slightly in scores; do not promise bit-identical results across devices.
+
+## 10. Browser app and hosting
+
+`app.py` uses Gradio for the page, event transport and queue. It loads all three
+checkpoints once, validates label order and warms them with a synthetic tone.
+Warm-up checks readiness and reduces some first-use overhead; it does not check
+emotion recognition accuracy.
+
+Upload flow:
+
+```text
+browser file → Gradio temporary filepath → bundled FFmpeg
+→ mono 16 kHz float32 samples → input validation
+→ temporary float WAV → saved model-specific extractor
+→ batch dimension → saved network → eight softmax scores → browser label
+```
+
+The intermediate WAV lets all three branches reuse exactly the same path-based
+preprocessing contract as the CLI. It is removed at the end of each prediction.
+Decode limits are 25 MB, 30 seconds and a 20-second FFmpeg timeout. An extra decoded
+second detects overlong uploads before rejecting them.
+
+Microphone flow:
+
+```text
+browser records chunks → filepath decoder → append per-session samples
+→ retain last 64,000 received samples → wait until full / skip very quiet window
+→ same prediction service → display updated scores
+```
+
+Gradio uses filepath input for live recording here; the callback turns it into
+a `(16000, samples)` pair. A reusable helper also supports integer PCM,
+stereo channel averaging and resampling. `gr.State` holds each visitor's
+buffer separately. Models/lock are shared, not audio history.
+
+Requests are configured around one-second stream intervals. First output needs
+four seconds of received context plus transport/processing time. The app keeps
+recording until the user stops. The stream's `time_limit=30` is a Gradio queue
+scheduling budget, not a 30-second microphone auto-stop.
+
+A fixed RMS threshold suppresses very quiet windows. There is no learned VAD,
+noise classifier, smoothing, transcript context or continuous recurrent memory.
+The latest received window may lag wall-clock speech if work is queued; there
+is no explicit stale-chunk dropping. Avoid claiming hard real-time guarantees.
+
+Uploads and streams have separate scheduler groups. A shared lock serializes
+preprocessing and inference to limit GPU overlap; it may also reduce throughput.
+The Gradio queue allows up to 16 pending events; stream concurrency is configured
+at four. This is a small laptop demonstration, not a scalability benchmark.
+
+The server binds to laptop loopback at the selected port (default 7860).
+`--share` supplies a temporary public HTTPS relay link. Friends use that link:
+their own 127.0.0.1 points to their own device. Microphone use requires browser
+permission and an appropriate browser context; the HTTPS share URL supports it.
+The laptop must remain awake/online with the server running.
+
+There is no prediction history or timing log. To add meaningful latency reporting
+later, separate decode/preprocessing time, encoder/head inference, queue wait and
+browser round trip. A larger observed delay does not necessarily mean a larger
+model. CUDA kernel timing also needs synchronization or CUDA events.
+
+Model changes clear scores but keep audio context. Starting/clearing a recording
+resets its state; stopping resets the buffer and preserves the last prediction.
+Cancellation does not undo a callback already executing. Gradio's cached files
+are cleaned periodically, while our per-inference WAV is removed immediately.
+
+## 11. Tests and proof
+
+There are 13 tests: six shared pipeline, three WavLM and four Gradio checks.
+
+| Evidence | Supports | Does not establish |
 |---|---|---|
-| One clip before batching | `[1, 64, 401]` | One input channel, mel bands, time frames |
-| Batch | `[16, 1, 64, 401]` | Sixteen recordings |
-| Block 1 | `[16, 16, 32, 200]` | Sixteen learned feature maps |
-| Block 2 | `[16, 32, 16, 100]` | More channels, smaller spatial dimensions |
-| Block 3 | `[16, 64, 8, 50]` | Same pattern |
-| Block 4 | `[16, 128, 4, 25]` | Four frequency regions remain |
-| Average over time | `[16, 128, 4, 1]` | Keep coarse frequency location |
-| Flatten | `[16, 512]` | One feature vector per recording |
-| Linear classifier | `[16, 8]` | Eight logits per recording |
+| Actor split/parser tests | Repeatability, disjoint groups, metadata handling | Generalization accuracy |
+| Tone/shape and normalization round trips | Dimensions, resampling and saved state | Emotion labels for synthetic tones |
+| CUDA AMP step | Actual GPU forward/backward/update path | GPU correctness on every platform |
+| Tiny local WavLM and cache tests | Freeze semantics, offline restoration, revision cache invalidation | Quality of downloaded pretrained representations |
+| App decoder/callback tests | WAV/WebM decoding, rolling buffers, resets/rejection | Real microphone permissions, browser timing or multiuser network behavior |
+| Held-out actor evaluation | Scores on this fixed acted speech population | Spontaneous speech, arbitrary accents/noise or calibrated mood estimates |
 
-Here the first `16` is batch size; the second dimension after a convolution is
-learned feature channels, not stereo channels. A **logit** is a raw score that can
-be negative or positive. It need not sum to one. Softmax converts logits to scores
-summing to one; argmax selects the highest-scoring class.
+The tiny WavLM test has hidden size eight and uses randomly initialized local
+weights: 16 pooled features rather than 1,536. This avoids downloading a large
+model to test integration. Testing `eval()` still permits gradients in the head;
+freezing the encoder is a separate property.
 
-The global-pooling baseline also averages frequency into one region. Retaining
-four frequency regions achieved higher validation macro F1 in our comparison.
-The final time average still loses some detailed ordering; this is not a full
-sequence model. An LSTM or attention layer could model timing differently, but
-neither was implemented or evaluated here.
+No retraining is needed after comment/documentation changes. Syntax checks,
+executable AST comparison and the existing tests can verify the annotations
+did not change behavior. Check actual audio/browser behavior on demo devices.
 
-## 5. What was the MFCC alternative?
+## 12. Practice questions
 
-MFCC means **mel-frequency cepstral coefficient**. MFCCs apply a cosine transform
-to a log-mel representation, producing a compact description of spectral shape.
-An MFCC axis is a coefficient index, not a frequency axis.
+**Why use three models?** To compare a learned local spectrogram model, a compact
+handcrafted summary baseline and a pretrained speech representation under the
+same actor split and evaluation criterion.
 
-Our alternative extracts 40 MFCCs and their first temporal derivatives, then
-takes each one's temporal mean and standard deviation: `40 × 4 = 160` features.
-This branch uses the full trimmed clip, without the CNN's four-second crop.
-It learns a multilayer perceptron (MLP) on those summary numbers.
+**Why a spectrogram instead of raw samples for the CNN?** It exposes evolving
+frequency structure in a compact 2D array. Raw-waveform learning is possible,
+but its architecture and data requirements differ. WavLM supplies that learned
+raw-waveform encoder path.
 
-Its normalization is different from the CNN's: each of the 160 features gets a
-mean/std fitted over **training examples only**. The stored values are reused at
-validation and prediction time. Fitting them on all examples would leak held-out
-data into preprocessing. They are PyTorch **buffers**, saved with the model but
-not updated by the optimizer.
+**Why 16 kHz and four seconds?** Compact speech processing and manageable memory.
+Four seconds fits much of this dataset after trimming. It can omit useful audio;
+the choices were not established as universally best.
 
-The MLP is fast and compact, but summaries discard temporal ordering. It reached
-very high training accuracy without comparable validation improvement. This is
-overfitting, not evidence that more training would necessarily solve the problem.
+**Why not crop MFCC too?** Statistics already map variable-length recordings
+to a fixed vector. Keeping the full trimmed clip preserves more summary evidence,
+though it makes long-upload comparisons differ from CNN/WavLM.
 
-## 6. How does training learn?
+**Why mean and std pooling for WavLM?** Fixed-size vectors with average context
+and temporal variation, without padding. It discards order and was not compared
+against all layer/pooling alternatives.
 
-Read `train()` in `ravdess.py`. A **parameter** is learned, such as a convolution
-weight. A **hyperparameter** is chosen externally, such as learning rate or batch
-size. An **epoch** is one pass through the training set. A **batch** is the smaller
-group used for an optimizer update: 960 files / 16 = 60 batches per CNN epoch.
+**Why freeze rather than fine-tune?** Fewer trainable parameters, cached features
+and smaller memory requirements on the 4 GB GPU. Fine-tuning remains an untested
+tradeoff; freezing is not always the accuracy-maximizing choice.
 
-The loop is:
+**What prevents leakage?** Whole-actor splits, duplicate checks, train-only
+normalization, validation-based selection and deliberate test access. These
+controls don't resolve every external-data or domain-shift question.
 
-1. Move the batch to the GPU. Model and input tensors must be on the same device.
-2. For the CNN, hide a small time strip and frequency strip. This teaches the
-   model to cope with missing local information. It is applied only in training.
-3. Clear old gradients, because PyTorch normally accumulates them.
-4. Run the forward pass to obtain logits.
-5. Compute cross entropy: penalize assigning low probability to the true label.
-6. Backpropagate using the chain rule to compute how weights affect the loss.
-7. Clip excessive gradient magnitude and let AdamW update the weights.
-8. After all batches, evaluate on validation actors and save the best checkpoint.
+**What does `model.eval()` do?** Changes dropout/BatchNorm behavior. It does
+not freeze parameters or disable autograd; inference mode handles graph tracking.
 
-For an unweighted single example, cross entropy is `-log(p_true)`. A true-class
-probability of 0.8 produces a smaller loss than 0.1. The actual PyTorch loss
-accepts **logits** and handles log-softmax internally; we do not apply softmax
-before `CrossEntropyLoss`.
+**Why no softmax in the network?** Cross entropy operates on logits and includes
+log-softmax. Use softmax when reporting eight relative scores.
 
-Neutral has half as many training examples as each other class. The loss gives
-neutral errors twice the relative weight. Oversampling could also address that
-imbalance; we used weighting. These methods change learning priorities, not the
-number of test examples or how accuracy is counted.
+**Why use macro F1?** Equal class importance despite neutral's smaller support;
+accuracy alone can hide a weak class.
 
-AdamW adjusts updates using gradient history and applies weight decay. Learning
-rate sets update scale. When validation macro F1 stalls, the scheduler lowers
-that rate. Early stopping later ends training after a specified number of epochs
-without a new best score. Our winner peaked at epoch 73 and stopped at 103.
+**Why does epoch 4 win WavLM training?** Later fitting of training data did not
+improve validation macro F1. Restoring the best checkpoint preserves the selected
+model rather than the later overfitted weights.
 
-The saved checkpoint contains weights, preprocessing, architecture settings and
-some run metadata. It does not contain everything required to resume training
-exactly at the next step: optimizer, scheduler, scaler and RNG states are missing.
+**Does the web app train on visitors?** No. It loads inference checkpoints and
+repeats forward passes; no optimizer step or persistent visitor learning exists.
 
-## 7. What role did the GPU play?
+**Can it work on any device?** The model runs on the laptop; a visitor needs a
+compatible browser/network and permitted audio capture. The share link enables
+remote access, while localhost does not. Real device checks are still necessary.
 
-The NVIDIA RTX 3050 Ti has 4 GB VRAM. PyTorch used CUDA for neural-network
-operations; librosa feature extraction ran on the CPU and was cached locally.
-Only batches needed to be sent to the GPU. We did not benchmark an exact speedup
-over CPU training, so do not invent a multiplier.
+**Why not claim it detects someone's true mood?** Acted labels, a small dataset,
+uncalibrated scores and domain shift do not justify that claim.
 
-Automatic mixed precision chooses lower precision for suitable operations, which
-can reduce memory use and improve throughput. Gradient scaling helps small
-float16 gradients survive numerically. We unscale before clipping, then update
-weights. Full float32 is a simpler alternative and is used for CPU execution
-here. See [PyTorch's mixed precision examples](https://docs.pytorch.org/docs/2.6/notes/amp_examples.html).
+**What would you improve first?** Establish a fresh actor-group evaluation,
+measure latency on intended devices, test noisy/spontaneous recordings, then
+compare pooling/augmentation/fine-tuning using validation. Prioritize evidence
+before architecture complexity.
 
-The GPU changes computational cost; it does not automatically make predictions
-more accurate. The completed CPU/GPU sample predictions differed in scores by
-less than 0.000001 and chose the same class.
+**How do you describe coding assistance?** Be accurate about the help you used.
+Explain the design, follow the data through the source, identify limitations and
+show verification. Understanding and ownership should be demonstrated by what
+you can explain and change, not by claiming to have written every line unaided.
 
-## 8. Why the actor split is central
+## 13. Final self-check before an interview
 
-The split is 16 training actors, four validation actors and four test actors:
-960/240/240 recordings. Model seed and actor-split seed are independent.
+- Trace one filename to target/actor metadata without passing its label as input.
+- Draw all three input/feature/head shapes and explain which weights train.
+- Explain class weighting, buffers, train/eval modes and one optimizer update.
+- Identify what validation chooses and when test recordings are first scored.
+- Show a saved configuration, history, selection record and a real error.
+- Start/check the Gradio server; test uploads and your intended microphone/browser.
+- Explain the difference between a four-second rolling window and guaranteed
+  real-time speech tracking.
+- State the current WavLM result and historical CNN result with their denominator.
+- Name what the synthetic tests prove and where real data/device evidence is needed.
+- Explain a sensible next experiment without calling an inspected test set untouched.
 
-Training data changes model weights. Validation data selects checkpoints and
-candidate models. Test data estimates performance after that selection. Splitting
-individual recordings randomly could put the same voice in training and testing,
-which would not support a claim about performance on unfamiliar voices.
-
-There are several kinds of leakage to distinguish:
-
-| Risk | What this project does |
-|---|---|
-| Same actor across partitions | Groups files by actor before splitting |
-| Duplicate folder copies | Uses one Kaggle subtree and rejects duplicate filenames |
-| Identical bytes under different names | Audit checks hashes; one pair stays in training |
-| Preprocessing fitted on test data | MLP scaling fits training only; CNN scaling is per clip |
-| Choosing the model with best test score | Chooses validation winner before test inference |
-
-The audit does not prove absence of all near-duplicate or re-encoded sound. The
-split is not gender-stratified and both spoken statements occur across partitions.
-It is an unseen-actor evaluation, not an unseen-text or real-world benchmark.
-
-Once test errors have been inspected, further tuning around those errors would
-use that knowledge. A future study needs a fresh protocol, such as nested actor
-group cross-validation. We did not run cross-validation in this project.
-
-## 9. Explain the results numerically
-
-**Accuracy:** 133 correct recordings / 240 = **55.42%**. A constant prediction of
-one of the larger classes gives 32/240 = 13.33%; uniform random guessing has
-12.5% expected accuracy. Beating these references is useful but not enough for a
-reliable product.
-
-**Precision:** among predictions of an emotion, how many are correct?
-**Recall:** among true recordings of that emotion, how many were found?
-**F1:** `2 × precision × recall / (precision + recall)`.
-**Macro F1:** compute F1 separately for all eight classes and take their plain
-average. It is not the F1 calculated from average precision and average recall.
-See the [F1 definition and averaging options](https://scikit-learn.org/stable/modules/generated/sklearn.metrics.f1_score.html).
-
-Use sad as a concrete example: the model correctly found 4 of 32 sad clips and
-predicted sad for 17 clips total. Precision is 4/17 ≈ 0.235, recall is 4/32 = 0.125,
-and F1 is about 0.163. This weak class matters even though overall accuracy is
-55.4%. Final macro F1 is **0.5324**. Calm has the highest class F1, about 0.758.
-
-Open `runs/final/report.html`. Confusion matrix rows are true labels and columns
-are predictions. Ten sad recordings were called disgust and eight were called
-calm. A row-normalized diagonal is per-class recall. Do not read those cells as
-precision.
-
-Model comparison used validation, not test, scores:
-
-| Candidate | Validation macro F1 |
-|---|---:|
-| Globally pooled CNN, seed 42 | 0.4359 |
-| Four-region CNN, seed 42 | **0.4834** |
-| MFCC MLP, seed 42 | 0.4452 |
-| Four-region CNN, seed 43 | 0.4617 |
-
-Only the validation winner was tested. Results vary by test actor from 50.0% to
-66.7% accuracy. Four people are too few to make a strong population-wide claim.
-
-## 10. Choices, alternatives and what the evidence supports
-
-| Choice | Why it was used | Alternative and its tradeoff | Actually compared? |
-|---|---|---|---|
-| Log-mel CNN | Learns local time/frequency patterns with a small model | Raw-waveform model learns its own front end but adds modeling demands | Raw waveform: no |
-| Four frequency regions | Retains coarse spectral location | Global pooling is smaller but loses location | Yes; four regions won validation here |
-| MFCC MLP | Fast conventional feature baseline | Sequence features retain order but add complexity | Yes; lower validation F1 |
-| 16 kHz mono | Compact, consistent inputs | 48 kHz/stereo retains more detail at added cost | No ablation |
-| Four-second center crop | Simple fixed batching | Random/multiple crops preserve different segments, at added logic/cost | No ablation |
-| Time/frequency masking | Simple regularization | Added noise/pitch/time changes need validation and can distort cues | No augmentation ablation |
-| Class-weighted loss | Accounts for fewer neutral trials | Oversampling repeats examples; unweighted loss changes priorities | No ablation |
-| Single actor split | Clear, affordable comparison | Group cross-validation measures variation more thoroughly | Cross-validation not run |
-| Compact model from scratch | Transparent pipeline that fits the available GPU | Pretrained speech encoder may improve features; must verify pretraining data and avoid emotion-test overlap | Pretraining not tried |
-| Validation macro F1 selection | Equal attention to each emotion | Accuracy emphasizes frequent classes; other metrics serve other objectives | Metric choice not optimized |
-
-An **ablation** changes one component to test its contribution. Do not describe
-an untested alternative as worse. A sound answer is: “This was a practical
-baseline choice. I would test that alternative under the same actor split.”
-
-## 11. Questions to rehearse aloud
-
-**Why use a CNN for sound?** Its input is a numerical time-frequency matrix.
-Convolutions can learn local patterns in that matrix. We are not pretending a
-waveform is a photograph or using the Plotly colors as features.
-
-**What is the difference between FFT and STFT?** One whole-clip FFT summarizes
-frequency content; repeated windowed FFTs preserve when those components occur.
-
-**Why log-mel rather than MFCC?** Log-mel retains a richer time-frequency grid for
-the CNN. We also tested an MFCC-summary MLP; it had lower validation macro F1.
-That compares whole pipelines, not the isolated effect of MFCCs alone.
-
-**What does `model.eval()` do?** It changes dropout/normalization behavior.
-`inference_mode()` separately turns off gradient tracking. Neither loads weights;
-`load_state_dict()` does that.
-
-**Why can validation accuracy exceed training accuracy?** Training batches are
-masked, dropout is active and weights change throughout the epoch. Validation
-uses fixed weights without those disturbances. Also, validation actors differ.
-
-**What is overfitting?** Learning patterns specific to the training examples that
-do not generalize. Our MLP's large training/validation gap illustrates it. Loss
-weighting/dropout differences mean raw loss curves also require care.
-
-**Why not just train longer?** The best validation checkpoint can occur before
-the last epoch. More training may improve memorization without helping new voices.
-
-**How reproducible is it?** Saved seeds, actor manifests, settings, checkpoints,
-feature caches and an environment lock help. GPU nondeterminism and the
-downloader's default “latest version” remain caveats; our dataset was version 1.
-
-**Can it handle a microphone or a long conversation?** There is a WAV-file command,
-not a microphone/streaming application. The selected model sees a centered segment;
-real-time segmentation, silence handling and aggregation would need more work.
-
-**Is 99.6% softmax confidence proof that the sample is calm?** No. The sample was
-predicted calm, but scores are uncalibrated and its true label was not established
-in that demo. A confident error is possible.
-
-**What would you improve first?** Establish broader actor-group evaluation, then
-compare targeted changes using validation only. A pretrained independent speech
-encoder and better augmentation are possible experiments, not promised gains.
-
-**Is the code production-ready?** It is a tested local training/evaluation baseline.
-It lacks deployment monitoring, calibrated uncertainty, broad external validation,
-streaming support and exact interrupted-training resume.
-
-## 12. A short preparation route before Monday
-
-**First pass, about 45 minutes:** read sections 1–4 and open the Fourier/audio
-feature reports. Explain sample rate, waveform, spectrogram and model input
-shape out loud. Avoid starting by memorizing library calls.
-
-**Second pass, about 45 minutes:** read the comments in `feature`, `EmotionCNN`,
-`train` and `score`. Point to each training-loop operation and describe its purpose.
-If you cannot explain one, write that question down and revisit its paragraph.
-
-**Third pass, about 30 minutes:** read sections 8–10 and `RESULTS.md`. Practice
-explaining the actor split, the validation choice, 133/240 accuracy, and the sad
-class failure. Know what was not tested.
-
-**Final pass, about 30 minutes:** run the small demo below and answer five of the
-questions without reading. Use the reports as evidence, not as a script to recite.
-These are suggested study blocks; take more time wherever the concepts are new.
-
-```powershell
-# Run from this project folder. Loads the completed model; does not retrain it.
-.\.venv\Scripts\python.exe ravdess.py predict --checkpoint runs/final/best.pt --audio sample_audio.wav --device cpu
-
-# Opens no training job; regenerates the educational feature report.
-.\.venv\Scripts\python.exe Audio_prep.py --audio sample_audio.wav
-```
-
-For a presentation, use the problem, input transformation, actor split, selected
-model, result and limitation as your six talking points. Keep the interactive
-reports available locally so the demo does not depend on internet access.
-
-If asked about the six-year history, describe it plainly: you started with audio
-exploration, paused while other commitments took priority, and recently returned
-to complete the baseline with AI assistance. Distinguish what you originally
-wrote, what was added recently, and what you can now explain and verify. You do
-not need to imply six years of continuous development or audio expertise.
-
-## Reading map
-
-| File | What to learn there |
-|---|---|
-| `Audio_prep.py` | Waveform, frequency/time axes, FFT, STFT and MFCC plots |
-| `Fourier_Transformation.py` | How two simple tones combine |
-| `download_data.py` | Data acquisition and duplicate-folder handling |
-| `analyze.py` | Data audit and descriptive plots |
-| `ravdess.py` | Features, actor split, networks, training, evaluation and prediction |
-| `finalize.py` | Validation-only selection followed by test evaluation |
-| `reporting.py` | Reading curves, confusion matrices and prediction-score plots |
-| `run_project.py` | How the experiments are reproduced in order |
-| `test_ravdess.py` | What the implementation checks cover; these are not accuracy tests |
-| `RESULTS.md` | Actual findings and limitations |
+If one step is hard to explain, return to its numbered source section in
+[CODE_WALKTHROUGH.md](CODE_WALKTHROUGH.md), then describe its input, operation,
+output and reason out loud.

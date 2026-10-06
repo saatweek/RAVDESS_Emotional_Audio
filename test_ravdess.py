@@ -1,4 +1,8 @@
-"""Run with python -m unittest -v; CUDA test skips on CPU-only machines."""
+"""Six synthetic checks of the shared data/CNN/MFCC pipeline, not accuracy tests.
+
+Run python -m unittest -v to discover these plus WavLM and app tests (13 total).
+The actual CUDA optimizer check skips on CPU-only machines.
+"""
 import tempfile
 import unittest
 from pathlib import Path
@@ -11,10 +15,12 @@ from ravdess import CONFIG, EmotionCNN, EmotionMLP, feature, records, split_reco
 
 
 class PipelineTests(unittest.TestCase):
+    """Use temporary files and tiny examples to check pipeline invariants."""
     # These are implementation checks, not evidence of real-world accuracy.
     # Held-out evaluation in RESULTS.md answers a different question: how well
     # the trained model predicts labels for actors excluded from training.
     def test_actor_splits_are_disjoint_and_repeatable(self):
+        """The same seed groups 24 actors reproducibly with no overlap or loss."""
         # Synthetic metadata is enough to test grouping: no audio/GPU is needed.
         rows = [dict(actor=a, label=e, path=f'{a}-{e}') for a in range(1, 25) for e in range(8)]
         splits = split_records(rows, 42)
@@ -27,6 +33,7 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(sum(map(len, splits.values())), len(rows))
 
     def test_parser_filters_song_and_rejects_duplicates(self):
+        """Filename parsing needs no audio decoding; placeholder files suffice."""
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             name = '03-01-06-01-02-01-12.wav'
@@ -41,6 +48,7 @@ class PipelineTests(unittest.TestCase):
                 records(root)
 
     def test_audio_shapes_and_checkpoint_roundtrip(self):
+        """Short/long stereo tones yield finite fixed shapes and reloadable logits."""
         # Generated tones test resampling/stereo handling and fixed shapes. They
         # do not represent emotions. Saving/reloading should preserve predictions.
         with tempfile.TemporaryDirectory() as temp:
@@ -65,6 +73,7 @@ class PipelineTests(unittest.TestCase):
 
     @unittest.skipUnless(torch.cuda.is_available(), 'CUDA unavailable')
     def test_cuda_mixed_precision_training_step(self):
+        """Exercise GPU forward, scaled backward, and AdamW update together."""
         # Actually compute a loss, gradients and a GPU update. Merely checking
         # cuda.is_available() would not verify the mixed precision training path.
         model = EmotionCNN().cuda()
@@ -79,6 +88,7 @@ class PipelineTests(unittest.TestCase):
         self.assertTrue(torch.isfinite(loss).item())
 
     def test_mfcc_and_saved_normalization(self):
+        """Check the 160-feature representation and buffer persistence."""
         # Weights alone are insufficient if input scaling is lost on reload.
         # This checks that the MFCC model's preprocessing buffers survive too.
         with tempfile.TemporaryDirectory() as temp:
@@ -97,6 +107,7 @@ class PipelineTests(unittest.TestCase):
                 torch.testing.assert_close(model(x), restored(x))
 
     def test_silent_audio_rejected(self):
+        """All-zero input must fail before creating misleading model features."""
         with tempfile.TemporaryDirectory() as temp:
             path = Path(temp) / 'silent.wav'
             sf.write(path, np.zeros(1600), 16000)

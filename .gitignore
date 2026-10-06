@@ -3,3 +3,6 @@ __pycache__/
 data/
 runs/
 *.pt
+
+# Gradio creates a local tunnel certificate when public sharing is enabled.
+.gradio/

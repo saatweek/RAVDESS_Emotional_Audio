@@ -1,4 +1,8 @@
-"""Standalone, offline Plotly reports for dataset exploration and model results."""
+"""Render existing arrays and metrics as standalone offline Plotly reports.
+
+write_report is the common HTML wrapper; training_report and prediction_report
+build its chart inputs. Reporting changes no model parameters. See the walkthrough.
+"""
 import html
 from pathlib import Path
 
@@ -6,10 +10,12 @@ import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
+# Mirror the training label order without importing ravdess and creating a cycle.
 EMOTIONS = ['neutral', 'calm', 'happy', 'sad', 'angry', 'fearful', 'disgust', 'surprised']
 
 
 def write_report(path, title, introduction, figures):
+    """Write a UTF-8 HTML page from (heading, description, Plotly figure) tuples."""
     # Reporting does not train or change weights. Embed Plotly once per document
     # so charts work offline without copying the library for every figure.
     # Static images are easier to paste into slides, but lose hover/zoom details.
@@ -34,6 +40,7 @@ h2{margin-top:0;font-size:23px}.intro{font-size:17px}footer{padding:20px 0;color
 
 
 def training_report(path, history, metrics, split):
+    """Plot optional epoch curves and the supplied validation or test metrics."""
     # Learning curves show changes across epochs. Falling training loss with
     # worsening validation loss is a possible overfitting signal; it is not proof
     # of the cause. Also inspect the validation metric used for model selection.
@@ -48,7 +55,7 @@ def training_report(path, history, metrics, split):
         curve.update_xaxes(title_text='Epoch')
         curve.update_yaxes(range=[0, 1], row=1, col=2)
         curve.update_layout(legend=dict(orientation='h', y=-0.22))
-        figures.append(('Learning curves', 'Training includes augmentation and dropout; validation does not. Losses use different weighting and are not directly comparable.', curve))
+        figures.append(('Learning curves', 'Training uses dropout; CNN runs also mask features. Validation uses neither. Losses use different weighting and are not directly comparable.', curve))
     cm = np.array(metrics['confusion_matrix'])
     # Row-normalize: each cell becomes a fraction of that TRUE emotion. Its
     # diagonal equals per-class recall. Column normalization would instead answer
@@ -82,10 +89,12 @@ def training_report(path, history, metrics, split):
 
 
 def prediction_report(path, audio, result, model_type='cnn'):
+    """Display all scores and describe the preprocessing of the selected model."""
     fig = go.Figure(go.Bar(x=list(result['probabilities']), y=list(result['probabilities'].values()), marker_color='#267bba'))
     fig.update_layout(yaxis=dict(title='Softmax score', range=[0, 1]), xaxis_title='Emotion')
-    description = ('a centered four-second segment after silence trimming' if model_type == 'cnn'
-                   else 'MFCC statistics across the recording after silence trimming')
+    description = {'cnn': 'a centered four-second segment after silence trimming',
+                   'mfcc': 'MFCC statistics across the recording after silence trimming',
+                   'wavlm': 'frozen WavLM features from up to four seconds of centered audio after silence trimming'}[model_type]
     write_report(path, f'Predicted emotion: {result["prediction"]}',
                  f'Audio file: {Path(audio).name}. The model uses {description}.',
                  [('Emotion scores', 'These scores are not a validated assessment of a person’s internal emotions.', fig)])

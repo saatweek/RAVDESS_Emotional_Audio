@@ -1,13 +1,19 @@
-"""Download the user-selected Kaggle dataset into this project."""
+"""Download the Kaggle speech dataset and save the selected dataset directory.
+
+This is data acquisition only. Read records() in ravdess.py next to understand
+which filenames become labeled examples. See CODE_WALKTHROUGH.md.
+"""
 import os
 from pathlib import Path
 
 
 def main():
+    """Set the cache default before importing KaggleHub; record one audio copy."""
     root = Path(__file__).resolve().parent
     # Cache under the project so repeated downloads can reuse files. setdefault
     # respects a cache path the user has explicitly configured elsewhere.
     os.environ.setdefault('KAGGLEHUB_CACHE', str(root / 'data' / 'kagglehub'))
+    # KaggleHub reads environment settings on import, so the order matters.
     import kagglehub
     # This fetches the latest version; our completed experiment used version 1.
     # Pin /versions/1 in the handle for strict dataset-version reproduction.
