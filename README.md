@@ -24,10 +24,12 @@ cd RAVDESS_Emotional_Audio
 
 The repository includes all project Python source, tests, dependency files,
 study guides, written results and the existing sample recording. Dataset downloads,
-feature caches, generated HTML/CSV/JSON run artifacts, trained checkpoints and the
-exported WavLM encoder are kept locally. The Python environment and Gradio's local
-sharing certificate are also excluded. A fresh clone therefore needs installation
-and model training before the web app can start.
+feature caches, generated HTML/CSV/JSON run artifacts and trained weights are
+excluded from GitHub. The Python environment and Gradio's local sharing certificate
+are also excluded. The trained WavLM bundle is available separately on
+[Hugging Face](https://huggingface.co/saatweek/wavlm-ravdess-emotion), including
+its frozen encoder; it can be downloaded instead of retrained. CNN and MFCC still
+need their local trained checkpoints before the three-model web app can start.
 
 Follow [installation](#install-on-another-machine), then
 [dataset download](#download-and-inspect-data). To create the three model files
@@ -37,18 +39,20 @@ at the exact paths expected by app.py on a fresh clone, run:
 $datasetPath = (Get-Content data/dataset_path.txt -Raw).Trim()
 .\.venv\Scripts\python.exe ravdess.py train --data $datasetPath --model cnn --pool-bands 4 --device auto --epochs 150 --patience 30 --skip-test --output runs/cnn_bands_seed42
 .\.venv\Scripts\python.exe ravdess.py train --data $datasetPath --model mfcc --device auto --batch-size 32 --epochs 150 --patience 25 --skip-test --output runs/mfcc_seed42
-.\.venv\Scripts\python.exe ravdess.py train --data $datasetPath --model wavlm --device auto --batch-size 32 --epochs 100 --patience 20 --skip-test --output runs/wavlm_seed42
+.\.venv\Scripts\python.exe download_model.py --repo saatweek/wavlm-ravdess-emotion --output runs/wavlm_comparison
 .\.venv\Scripts\python.exe finalize.py --runs runs/cnn_bands_seed42 --output runs/final --device auto
-.\.venv\Scripts\python.exe finalize.py --runs runs/wavlm_seed42 --output runs/wavlm_comparison --device auto
 .\.venv\Scripts\python.exe -u app.py --share
 ```
 
-These commands train each option and finalize CNN and WavLM separately to populate
-the demo's fixed checkpoint paths. They are not the original multi-candidate
+These commands train CNN/MFCC, finalize CNN and download the published WavLM
+release to populate the demo's fixed checkpoint paths. They are not the original multi-candidate
 comparison; use [the full runner](#train-select-and-evaluate) to reproduce that
 workflow. Training may produce different scores across environments. Each output
 directory must be new; on the original laptop, reuse the already trained models
 instead of running this fresh-clone recipe over existing folders.
+
+To train WavLM yourself rather than download this release, follow
+[the WavLM training section](#train-and-predict-with-wavlm).
 
 The full runner writes models under its chosen output folder. To serve those
 models instead, update MODEL_PATHS in app.py to their actual checkpoint locations.
@@ -81,6 +85,7 @@ Read source in this order, rather than alphabetically:
 | 10 | [run_project.py](run_project.py) | How the experiment steps are orchestrated |
 | 11 | [app.py](app.py) | Decode uploads, keep session windows, reuse checkpoints, serve requests |
 | 12 | [test_ravdess.py](test_ravdess.py), [test_wavlm.py](test_wavlm.py), [test_app.py](test_app.py) | What is verified and what needs real data/browser checks |
+| 13 | [download_model.py](download_model.py), [MODEL_CARD.md](MODEL_CARD.md) | Hub revision pinning, release integrity and published model provenance |
 
 The walkthrough covers every project-owned Python file. Comments explain
 purpose and choices near the source; use the walkthrough to trace a statement's
@@ -220,7 +225,36 @@ One byte-identical actor-07 pair stays in training; none crosses splits.
 Metadata checks cover all files; illustrative log-mel examples use training actors.
 Audit charts show original-length audio, not the exact normalized CNN input.
 
+## Download the published WavLM model
+
+Model: [saatweek/wavlm-ravdess-emotion](https://huggingface.co/saatweek/wavlm-ravdess-emotion).
+Initial verified release: `d5ecc1a27ea641a2131b1a877d3600f4bd800a3a`.
+The release includes the trained custom head, unchanged frozen encoder/processor,
+model card, aggregate evaluation, provenance notices and file hashes. No dataset
+recordings or local path manifests are uploaded.
+
+After installing this project's dependencies, download into a new folder:
+
+```powershell
+.\.venv\Scripts\python.exe download_model.py --repo saatweek/wavlm-ravdess-emotion --output runs/downloaded_wavlm
+.\.venv\Scripts\python.exe ravdess.py predict --checkpoint runs/downloaded_wavlm/best.pt --audio sample_audio.wav --device auto
+```
+
+The helper resolves main to a Hub commit before downloading and verifies file
+sizes and SHA-256 hashes. It prints the resolved revision; use `--revision COMMIT`
+to pin a release later. It refuses an existing output directory and does not
+execute Python from the Hub repository. Loading uses this project's custom
+`ravdess.load_checkpoint` implementation, not a standard Transformers classifier.
+
+For the app, point its WavLM MODEL_PATHS entry at the downloaded best.pt, or on a
+fresh clone download directly into runs/wavlm_comparison as shown above. CNN/MFCC
+remain separate trained options. Model storage on the Hub does not host the app;
+your laptop still runs Gradio. See [MODEL_CARD.md](MODEL_CARD.md) for full details.
+
 ## Train and predict with WavLM
+
+To use the trained release immediately, follow the download section above.
+The commands below train a new head.
 
 Hugging Face Transformers loads
 [`microsoft/wavlm-base-plus`](https://huggingface.co/microsoft/wavlm-base-plus).

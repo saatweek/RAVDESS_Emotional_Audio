@@ -7,7 +7,7 @@ statement; repeated chart/argument/assertion lines are explained together by
 their shared role. The goal is to explain each line's **input, operation, output
 and reason**, not memorize a paraphrase of Python syntax.
 
-All 13 project-owned Python files are covered below. NumPy, librosa, PyTorch,
+All 14 project-owned Python files are covered below. NumPy, librosa, PyTorch,
 Transformers, Plotly and Gradio supply library implementations; this guide explains
 the contracts our code uses rather than every line inside those dependencies.
 
@@ -27,7 +27,8 @@ the contracts our code uses rather than every line inside those dependencies.
 | 10 | [run_project.py](run_project.py) | Section 18 |
 | 11 | [app.py](app.py) | Sections 19–21 |
 | 12 | [test_ravdess.py](test_ravdess.py), [test_wavlm.py](test_wavlm.py), [test_app.py](test_app.py) | Section 22 |
-| 13 | Requirements, result documents, generated artifacts | Section 23 |
+| 13 | [download_model.py](download_model.py) | Section 22a |
+| 14 | Requirements, model card, results and artifacts | Section 23 |
 
 The source order in ravdess.py is convenient for definitions, while this study
 order introduces data before the networks and networks before optimization.
@@ -771,6 +772,37 @@ These tests call Python callbacks directly. No browser microphone permission,
 actual recording hardware, public relay, service fairness or exact one-second
 wall-clock output guarantee is verified by them.
 
+## 22a. download_model.py: get and verify the published model
+
+Read [download_model.py](download_model.py) after checkpoint restoration. It
+downloads assets, not a new Python implementation of the model.
+
+### main()
+
+1. Parse required owner/model ID, optional revision and a new output folder.
+   Refuse an existing folder so downloading cannot overwrite local training.
+2. HfApi.model_info resolves the requested branch/tag to a commit hash before
+   downloading. All files are then fetched from that same immutable revision.
+3. Create the folder and call snapshot_download with an explicit allowlist of
+   model files, manifest, evaluation and notices. It does not execute Hub code.
+4. verify_release checks the package, then print the resolved Hub URL and local
+   checkpoint path. Public downloads do not require a login.
+
+### verify_release()
+
+1. Read release_manifest.json and require entries for the head, encoder weights,
+   architecture config and processor config. A head alone cannot process audio.
+2. For each declared file, reject absolute paths, parent traversal, backslashes
+   or drive/stream colons. File names must remain within the selected folder.
+3. Require a regular file of the expected size. Read it in one-megabyte chunks
+   into a SHA-256 digest, then compare its hash with the release manifest.
+4. Return the verified manifest. Missing or corrupted files raise; partially
+   downloaded output remains available for diagnosis. This integrity check does
+   not replace trust in the model publisher.
+
+After download, use the existing ravdess.load_checkpoint/predict path. Point
+the app's WavLM checkpoint at that location; CNN/MFCC still need their own weights.
+
 ## 23. Files outside the Python source
 
 | File / directory | How to read it / why it exists |
@@ -779,6 +811,7 @@ wall-clock output guarantee is verified by them.
 | [INTERVIEW_GUIDE.md](INTERVIEW_GUIDE.md) | Explain reasoning, alternatives, results and limits in your own words |
 | [RESULTS.md](RESULTS.md) | Historical four-run CNN/MFCC experiment, not the current WavLM winner |
 | [WAVLM_RESULTS.md](WAVLM_RESULTS.md) | Later frozen-encoder result on the same split and its saved settings |
+| [MODEL_CARD.md](MODEL_CARD.md) | Published Hub model documentation, loading example, results and provenance |
 | [requirements.txt](requirements.txt) | Direct package dependencies and compatibility bounds; imports link code to packages |
 | [requirements-lock.txt](requirements-lock.txt) | Exact installed packages for the verified environment, including transitive dependencies |
 | [.gitignore](.gitignore) | Excludes local environment, caches, data, model weights and generated run artifacts |

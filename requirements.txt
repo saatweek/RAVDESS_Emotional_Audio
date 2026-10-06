@@ -1,5 +1,7 @@
 torch>=2.4,<3
 transformers>=4.46,<5
+# Direct Hub API use for pinned model downloads and release metadata.
+huggingface-hub>=0.36,<1
 # Gradio 6.0 supports the Hugging Face Hub version used by Transformers 4.x.
 gradio>=6.0,<6.1
 imageio-ffmpeg>=0.6,<1

@@ -454,6 +454,13 @@ noise classifier, smoothing, transcript context or continuous recurrent memory.
 The latest received window may lag wall-clock speech if work is queued; there
 is no explicit stale-chunk dropping. Avoid claiming hard real-time guarantees.
 
+The trained WavLM package is also published on the Hugging Face Hub. That stores
+downloadable model assets; the laptop still hosts Gradio. download_model.py pins
+a Hub commit and checks declared hashes before the normal local loader is used.
+The package includes the frozen encoder and custom head, so no retraining is
+needed for WavLM inference. It is not a standard Transformers classification
+export and does not require executing downloaded Python code.
+
 Uploads and streams have separate scheduler groups. A shared lock serializes
 preprocessing and inference to limit GPU overlap; it may also reduce throughput.
 The Gradio queue allows up to 16 pending events; stream concurrency is configured
