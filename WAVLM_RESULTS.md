@@ -4,6 +4,11 @@ Published model: [saatweek/wavlm-ravdess-emotion](https://huggingface.co/saatwee
 Use [download_model.py](download_model.py) to get the trained bundle without
 retraining; [MODEL_CARD.md](MODEL_CARD.md) describes the exact inference contract.
 
+Published evidence: [test report](runs/published/wavlm_comparison/report.html),
+[candidate/actor comparison](runs/published/wavlm_comparison/comparison.html),
+and [test metrics](runs/published/wavlm_comparison/test_metrics.json).
+Download the repository to open interactive HTML with its shared local assets.
+
 Trained and evaluated on October 6, 2026 using `microsoft/wavlm-base-plus`
 through Hugging Face Transformers 4.57.6 and PyTorch 2.6.0+cu124 on the
 NVIDIA RTX 3050 Ti Laptop GPU (4 GB).

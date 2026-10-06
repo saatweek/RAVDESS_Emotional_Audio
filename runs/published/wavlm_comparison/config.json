@@ -1,0 +1,37 @@
+{
+  "arguments": {
+    "command": "train",
+    "data": "DATASET_ROOT",
+    "output": "runs/wavlm_seed42",
+    "epochs": 100,
+    "batch_size": 32,
+    "patience": 20,
+    "lr": 0.001,
+    "seed": 42,
+    "model": "wavlm",
+    "wavlm_checkpoint": "microsoft/wavlm-base-plus",
+    "wavlm_revision": "main",
+    "split_seed": 42,
+    "cache": "data/features",
+    "skip_test": true,
+    "pool_bands": 4,
+    "device": "cuda"
+  },
+  "preprocessing": {
+    "sr": 16000,
+    "seconds": 4,
+    "n_fft": 512,
+    "hop_length": 160,
+    "n_mels": 64,
+    "kind": "wavlm",
+    "wavlm_checkpoint": "microsoft/wavlm-base-plus",
+    "wavlm_revision": "4c66d4806a428f2e922ccfa1a962776e232d487b",
+    "feature_version": 1,
+    "pooling": "last_hidden_mean_std",
+    "encoder_precision": "float32",
+    "transformers_version": "4.57.6",
+    "embedding_dim": 1536
+  },
+  "torch": "2.6.0+cu124",
+  "device": "cuda"
+}

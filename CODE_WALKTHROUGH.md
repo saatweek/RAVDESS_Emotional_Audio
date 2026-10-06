@@ -814,7 +814,8 @@ the app's WavLM checkpoint at that location; CNN/MFCC still need their own weigh
 | [MODEL_CARD.md](MODEL_CARD.md) | Published Hub model documentation, loading example, results and provenance |
 | [requirements.txt](requirements.txt) | Direct package dependencies and compatibility bounds; imports link code to packages |
 | [requirements-lock.txt](requirements-lock.txt) | Exact installed packages for the verified environment, including transitive dependencies |
-| [.gitignore](.gitignore) | Excludes local environment, caches, data, model weights and generated run artifacts |
+| [.gitignore](.gitignore) | Excludes environment, caches, data, weights and operational runs; allows sanitized runs/published/ |
+| [runs/published/README.md](runs/published/README.md) | Public experiment snapshots; paths are rebased and HTML reports share a local Plotly asset |
 | `.venv/` | Installed Python environment, not project-owned model code |
 | `data/dataset_path.txt`, dataset WAVs | Dataset location and samples; filenames encode labels for supervised experiments |
 | `data/features/*.npy`, `data/huggingface/` | Cached arrays and downloaded encoder assets |

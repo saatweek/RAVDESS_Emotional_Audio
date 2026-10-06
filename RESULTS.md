@@ -5,6 +5,11 @@ the web app's CNN option. The later frozen WavLM experiment is the current best
 reported result: see [WAVLM_RESULTS.md](WAVLM_RESULTS.md). The web demo and study
 order are documented in [README.md](README.md) and [CODE_WALKTHROUGH.md](CODE_WALKTHROUGH.md).
 
+Published evidence: [CNN test report](runs/published/final/report.html),
+[candidate/actor comparison](runs/published/final/comparison.html), and
+[per-recording predictions](runs/published/final/test_predictions.csv).
+Download the repository to open interactive HTML with its shared local assets.
+
 ## Outcome
 
 The selected frequency-preserving CNN achieved **55.42% accuracy (133/240)**,

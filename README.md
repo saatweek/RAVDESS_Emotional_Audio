@@ -24,8 +24,9 @@ cd RAVDESS_Emotional_Audio
 
 The repository includes all project Python source, tests, dependency files,
 study guides, written results and the existing sample recording. Dataset downloads,
-feature caches, generated HTML/CSV/JSON run artifacts and trained weights are
-excluded from GitHub. The Python environment and Gradio's local sharing certificate
+feature caches, raw operational run folders and trained weights are
+excluded from GitHub. Portable reports and metadata are included in
+[runs/published](runs/published/README.md). The Python environment and Gradio's local sharing certificate
 are also excluded. The trained WavLM bundle is available separately on
 [Hugging Face](https://huggingface.co/saatweek/wavlm-ravdess-emotion), including
 its frozen encoder; it can be downloaded instead of retrained. CNN and MFCC still
@@ -321,6 +322,23 @@ Checkpoints contain model state and metadata, not full optimizer/RNG resume stat
 
 ## Evaluation and saved artifacts
 
+The completed experiment artifacts are available in
+[runs/published/](runs/published/README.md): learning histories, configurations,
+portable split manifests, validation/test metrics, prediction CSVs and interactive
+reports. Start with the [WavLM report](runs/published/wavlm_comparison/report.html)
+and [candidate comparison](runs/published/wavlm_comparison/comparison.html).
+
+Clone or [download the repository ZIP](https://github.com/saatweek/RAVDESS_Emotional_Audio/archive/refs/heads/main.zip),
+then open an HTML report in your browser. GitHub displays HTML source rather than
+running the charts. Keep runs/published/_assets/ with the reports: one shared local
+Plotly library makes them work offline while reducing duplicated file size.
+
+These are historical snapshots. Local paths are replaced by DATASET_ROOT,
+PROJECT_ROOT or HOME_ROOT placeholders; metric values and ordering are preserved.
+Rebase published dataset paths before using a split manifest for evaluation.
+The original local run folders remain operational and were not modified. Weights
+stay excluded; get WavLM from Hugging Face or train the baseline models locally.
+
 Split seed 42 assigns **16 actors/960 files to training**, **four/240 to
 validation**, and **four/240 to testing**. Model seed is independent of split
 seed. Labels are present in all partitions; actors never cross partitions.
@@ -347,10 +365,11 @@ evaluation protocol to support an untouched-test claim.
 | Final `test_metrics.json`, `test_predictions.csv` | Aggregate, per-actor and per-recording test evidence |
 | `report.html`, `comparison.html`, `prediction.html` | Offline interactive reports |
 
-Open generated HTML directly in a browser: Plotly is embedded once in each
-report. Audio, caches, checkpoints and generated reports are local and ignored
-by Git. Commit the source/docs; distributing those alone does not distribute
-trained model files or the dataset.
+Open locally generated HTML directly in a browser: Plotly is embedded once in
+each original report. The published copies share the same library in _assets/.
+Audio, caches, checkpoints and raw run directories remain ignored by Git; the
+sanitized runs/published/ snapshot is tracked. Downloading the GitHub repository
+does not distribute trained model files or the dataset.
 
 ## Verification and illustrative plots
 

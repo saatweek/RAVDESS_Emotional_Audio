@@ -1,0 +1,28 @@
+{
+  "arguments": {
+    "command": "train",
+    "data": "DATASET_ROOT",
+    "output": "runs/mfcc_seed42",
+    "epochs": 150,
+    "batch_size": 32,
+    "patience": 25,
+    "lr": 0.001,
+    "seed": 42,
+    "model": "mfcc",
+    "split_seed": 42,
+    "cache": "data/features",
+    "skip_test": true,
+    "pool_bands": 4,
+    "device": "cuda"
+  },
+  "preprocessing": {
+    "sr": 16000,
+    "seconds": 4,
+    "n_fft": 512,
+    "hop_length": 160,
+    "n_mels": 64,
+    "kind": "mfcc"
+  },
+  "torch": "2.6.0+cu124",
+  "device": "cuda"
+}

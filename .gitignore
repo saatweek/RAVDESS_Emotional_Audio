@@ -1,8 +1,11 @@
 .venv/
 __pycache__/
 data/
-runs/
+# Keep operational runs local; publish sanitized reports in one explicit folder.
+runs/*
+!runs/published/
 *.pt
+*.safetensors
 
 # Gradio creates a local tunnel certificate when public sharing is enabled.
 .gradio/
